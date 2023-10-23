@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 
 from mmcv.ops import ModulatedDeformConv2d, modulated_deform_conv2d
-from mmcv.cnn import constant_init
+from mmengine.model.weight_init import  constant_init
 
 from model.modules.flow_comp import flow_warp
 
