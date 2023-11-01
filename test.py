@@ -14,7 +14,7 @@ from core.utils import to_tensors
 
 
 # sample reference frames from the whole video
-def get_ref_index(f, neighbor_ids, length):
+def get_ref_index(f, neighbor_ids, length, ref_length, num_ref):
     ref_index = []
     if num_ref == -1:
         for i in range(0, length, ref_length):
@@ -42,7 +42,7 @@ def read_mask(mpath, size):
         m = np.array(m.convert("L"))
         m = np.array(m > 0).astype(np.uint8)
         m = cv2.dilate(
-            m, cv2.getStructuringElement(cv2.MORPH_CROSS, (3, 3)), iterations=4
+            m, cv2.getStructuringElement(cv2.MORPH_CROSS, (10, 10)), iterations=8
         )
         masks.append(Image.fromarray(m * 255))
     return masks
@@ -154,7 +154,7 @@ def main_worker(
                 max(0, f - neighbor_stride), min(video_length, f + neighbor_stride + 1)
             )
         ]
-        ref_ids = get_ref_index(f, neighbor_ids, video_length)
+        ref_ids = get_ref_index(f, neighbor_ids, video_length, args.step, args.num_ref)
         selected_imgs = imgs[:1, neighbor_ids + ref_ids, :, :, :]
         selected_masks = masks[:1, neighbor_ids + ref_ids, :, :, :]
         with torch.no_grad():
@@ -187,46 +187,13 @@ def main_worker(
                     )
 
     # saving videos
-    print("Saving videos...")
-    save_dir_name = "results"
-    ext_name = "_results.mp4"
-    save_base_name = args.video.split("/")[-1]
-    save_name = (
-        save_base_name.replace(".mp4", ext_name)
-        if args.use_mp4
-        else save_base_name + ext_name
-    )
-    if not os.path.exists(save_dir_name):
-        os.makedirs(save_dir_name)
-    save_path = os.path.join(save_dir_name, save_name)
     writer = cv2.VideoWriter(
-        args.out_file, cv2.VideoWriter_fourcc(*"mp4v"), default_fps, size
+        args.out_file, cv2.VideoWriter_fourcc(*"mp4v"), savefps, (w, h)
     )
     for f in range(video_length):
         comp = comp_frames[f].astype(np.uint8)
         writer.write(cv2.cvtColor(comp, cv2.COLOR_BGR2RGB))
     writer.release()
-    print(f"Finish test! The result video is saved in: {args.out_file}.")
-
-    # show results
-    print("Let us enjoy the result!")
-    fig = plt.figure("Let us enjoy the result")
-    ax1 = fig.add_subplot(1, 2, 1)
-    ax1.axis("off")
-    ax1.set_title("Original Video")
-    ax2 = fig.add_subplot(1, 2, 2)
-    ax2.axis("off")
-    ax2.set_title("Our Result")
-    imdata1 = ax1.imshow(frames[0])
-    imdata2 = ax2.imshow(comp_frames[0].astype(np.uint8))
-
-    def update(idx):
-        imdata1.set_data(frames[idx])
-        imdata2.set_data(comp_frames[idx].astype(np.uint8))
-
-    fig.tight_layout()
-    anim = animation.FuncAnimation(fig, update, frames=len(frames), interval=50)
-    plt.show()
 
 
 if __name__ == "__main__":
