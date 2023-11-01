@@ -5,7 +5,7 @@ import torch.nn.functional as F
 import torch
 
 from mmcv.cnn import ConvModule
-from mmcv.runner import load_checkpoint
+from mmengine.runner import load_checkpoint
 
 
 class FlowCompletionLoss(nn.Module):
