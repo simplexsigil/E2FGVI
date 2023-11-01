@@ -12,28 +12,6 @@ import torch
 
 from core.utils import to_tensors
 
-parser = argparse.ArgumentParser(description="E2FGVI")
-parser.add_argument("-v", "--video", type=str, required=True)
-parser.add_argument("-c", "--ckpt", type=str, required=True)
-parser.add_argument("-m", "--mask", type=str, required=True)
-parser.add_argument("--model", type=str, choices=['e2fgvi', 'e2fgvi_hq'])
-parser.add_argument("--step", type=int, default=10)
-parser.add_argument("--num_ref", type=int, default=-1)
-parser.add_argument("--neighbor_stride", type=int, default=5)
-parser.add_argument("--savefps", type=int, default=24)
-
-# args for e2fgvi_hq (which can handle videos with arbitrary resolution)
-parser.add_argument("--set_size", action='store_true', default=False)
-parser.add_argument("--width", type=int)
-parser.add_argument("--height", type=int)
-
-args = parser.parse_args()
-
-ref_length = args.step  # ref_step
-num_ref = args.num_ref
-neighbor_stride = args.neighbor_stride
-default_fps = args.savefps
-
 
 # sample reference frames from the whole video
 def get_ref_index(f, neighbor_ids, length):
@@ -61,11 +39,11 @@ def read_mask(mpath, size):
     for mp in mnames:
         m = Image.open(os.path.join(mpath, mp))
         m = m.resize(size, Image.NEAREST)
-        m = np.array(m.convert('L'))
+        m = np.array(m.convert("L"))
         m = np.array(m > 0).astype(np.uint8)
-        m = cv2.dilate(m,
-                       cv2.getStructuringElement(cv2.MORPH_CROSS, (3, 3)),
-                       iterations=4)
+        m = cv2.dilate(
+            m, cv2.getStructuringElement(cv2.MORPH_CROSS, (3, 3)), iterations=4
+        )
         masks.append(Image.fromarray(m * 255))
     return masks
 
@@ -86,7 +64,7 @@ def read_frame_from_videos(args):
     else:
         lst = os.listdir(vname)
         lst.sort()
-        fr_lst = [vname + '/' + name for name in lst]
+        fr_lst = [vname + "/" + name for name in lst]
         for fr in fr_lst:
             image = cv2.imread(fr)
             image = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
@@ -103,7 +81,33 @@ def resize_frames(frames, size=None):
     return frames, size
 
 
-def main_worker():
+def main_worker(
+    video,
+    ckpt,
+    mask,
+    out_file,
+    model,
+    step=10,
+    num_ref=-1,
+    neighbor_stride=5,
+    savefps=24,
+    set_size=False,
+    width=None,
+    height=None,
+):
+    args = argparse.Namespace()
+    args.video = video
+    args.ckpt = ckpt
+    args.mask = mask
+    args.out_file = out_file
+    args.model = model
+    args.step = step
+    args.num_ref = num_ref
+    args.neighbor_stride = neighbor_stride
+    args.savefps = savefps
+    args.set_size = set_size
+    args.width = width
+    args.height = height
     # set up models
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -114,17 +118,17 @@ def main_worker():
     else:
         size = None
 
-    net = importlib.import_module('model.' + args.model)
+    net = importlib.import_module("model." + args.model)
     model = net.InpaintGenerator().to(device)
     data = torch.load(args.ckpt, map_location=device)
     model.load_state_dict(data)
-    print(f'Loading model from: {args.ckpt}')
+    print(f"Loading model from: {args.ckpt}")
     model.eval()
 
     # prepare datset
-    args.use_mp4 = True if args.video.endswith('.mp4') else False
+    args.use_mp4 = True if args.video.endswith(".mp4") else False
     print(
-        f'Loading videos and masks from: {args.video} | INPUT MP4 format: {args.use_mp4}'
+        f"Loading videos and masks from: {args.video} | INPUT MP4 format: {args.use_mp4}"
     )
     frames = read_frame_from_videos(args)
     frames, size = resize_frames(frames, size)
@@ -142,11 +146,13 @@ def main_worker():
     comp_frames = [None] * video_length
 
     # completing holes by e2fgvi
-    print(f'Start test...')
+    print(f"Start test...")
     for f in tqdm(range(0, video_length, neighbor_stride)):
         neighbor_ids = [
-            i for i in range(max(0, f - neighbor_stride),
-                             min(video_length, f + neighbor_stride + 1))
+            i
+            for i in range(
+                max(0, f - neighbor_stride), min(video_length, f + neighbor_stride + 1)
+            )
         ]
         ref_ids = get_ref_index(f, neighbor_ids, video_length)
         selected_imgs = imgs[:1, neighbor_ids + ref_ids, :, :, :]
@@ -157,54 +163,60 @@ def main_worker():
             mod_size_w = 108
             h_pad = (mod_size_h - h % mod_size_h) % mod_size_h
             w_pad = (mod_size_w - w % mod_size_w) % mod_size_w
-            masked_imgs = torch.cat(
-                [masked_imgs, torch.flip(masked_imgs, [3])],
-                3)[:, :, :, :h + h_pad, :]
-            masked_imgs = torch.cat(
-                [masked_imgs, torch.flip(masked_imgs, [4])],
-                4)[:, :, :, :, :w + w_pad]
+            masked_imgs = torch.cat([masked_imgs, torch.flip(masked_imgs, [3])], 3)[
+                :, :, :, : h + h_pad, :
+            ]
+            masked_imgs = torch.cat([masked_imgs, torch.flip(masked_imgs, [4])], 4)[
+                :, :, :, :, : w + w_pad
+            ]
             pred_imgs, _ = model(masked_imgs, len(neighbor_ids))
             pred_imgs = pred_imgs[:, :, :h, :w]
             pred_imgs = (pred_imgs + 1) / 2
             pred_imgs = pred_imgs.cpu().permute(0, 2, 3, 1).numpy() * 255
             for i in range(len(neighbor_ids)):
                 idx = neighbor_ids[i]
-                img = np.array(pred_imgs[i]).astype(
-                    np.uint8) * binary_masks[idx] + frames[idx] * (
-                        1 - binary_masks[idx])
+                img = np.array(pred_imgs[i]).astype(np.uint8) * binary_masks[
+                    idx
+                ] + frames[idx] * (1 - binary_masks[idx])
                 if comp_frames[idx] is None:
                     comp_frames[idx] = img
                 else:
-                    comp_frames[idx] = comp_frames[idx].astype(
-                        np.float32) * 0.5 + img.astype(np.float32) * 0.5
+                    comp_frames[idx] = (
+                        comp_frames[idx].astype(np.float32) * 0.5
+                        + img.astype(np.float32) * 0.5
+                    )
 
     # saving videos
-    print('Saving videos...')
-    save_dir_name = 'results'
-    ext_name = '_results.mp4'
-    save_base_name = args.video.split('/')[-1]
-    save_name = save_base_name.replace(
-        '.mp4', ext_name) if args.use_mp4 else save_base_name + ext_name
+    print("Saving videos...")
+    save_dir_name = "results"
+    ext_name = "_results.mp4"
+    save_base_name = args.video.split("/")[-1]
+    save_name = (
+        save_base_name.replace(".mp4", ext_name)
+        if args.use_mp4
+        else save_base_name + ext_name
+    )
     if not os.path.exists(save_dir_name):
         os.makedirs(save_dir_name)
     save_path = os.path.join(save_dir_name, save_name)
-    writer = cv2.VideoWriter(save_path, cv2.VideoWriter_fourcc(*"mp4v"),
-                             default_fps, size)
+    writer = cv2.VideoWriter(
+        args.out_file, cv2.VideoWriter_fourcc(*"mp4v"), default_fps, size
+    )
     for f in range(video_length):
         comp = comp_frames[f].astype(np.uint8)
         writer.write(cv2.cvtColor(comp, cv2.COLOR_BGR2RGB))
     writer.release()
-    print(f'Finish test! The result video is saved in: {save_path}.')
+    print(f"Finish test! The result video is saved in: {args.out_file}.")
 
     # show results
-    print('Let us enjoy the result!')
-    fig = plt.figure('Let us enjoy the result')
+    print("Let us enjoy the result!")
+    fig = plt.figure("Let us enjoy the result")
     ax1 = fig.add_subplot(1, 2, 1)
-    ax1.axis('off')
-    ax1.set_title('Original Video')
+    ax1.axis("off")
+    ax1.set_title("Original Video")
     ax2 = fig.add_subplot(1, 2, 2)
-    ax2.axis('off')
-    ax2.set_title('Our Result')
+    ax2.axis("off")
+    ax2.set_title("Our Result")
     imdata1 = ax1.imshow(frames[0])
     imdata2 = ax2.imshow(comp_frames[0].astype(np.uint8))
 
@@ -213,12 +225,32 @@ def main_worker():
         imdata2.set_data(comp_frames[idx].astype(np.uint8))
 
     fig.tight_layout()
-    anim = animation.FuncAnimation(fig,
-                                   update,
-                                   frames=len(frames),
-                                   interval=50)
+    anim = animation.FuncAnimation(fig, update, frames=len(frames), interval=50)
     plt.show()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="E2FGVI")
+    parser.add_argument("-v", "--video", type=str, required=True)
+    parser.add_argument("-c", "--ckpt", type=str, required=True)
+    parser.add_argument("-m", "--mask", type=str, required=True)
+    parser.add_argument("-o", "--out_file", type=str, required=True)
+    parser.add_argument("--model", type=str, choices=["e2fgvi", "e2fgvi_hq"])
+    parser.add_argument("--step", type=int, default=10)
+    parser.add_argument("--num_ref", type=int, default=-1)
+    parser.add_argument("--neighbor_stride", type=int, default=5)
+    parser.add_argument("--savefps", type=int, default=24)
+
+    # args for e2fgvi_hq (which can handle videos with arbitrary resolution)
+    parser.add_argument("--set_size", action="store_true", default=False)
+    parser.add_argument("--width", type=int)
+    parser.add_argument("--height", type=int)
+
+    args = parser.parse_args()
+
+    ref_length = args.step  # ref_step
+    num_ref = args.num_ref
+    neighbor_stride = args.neighbor_stride
+    default_fps = args.savefps
+
     main_worker()
