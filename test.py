@@ -122,14 +122,10 @@ def main_worker(
     model = net.InpaintGenerator().to(device)
     data = torch.load(args.ckpt, map_location=device)
     model.load_state_dict(data)
-    print(f"Loading model from: {args.ckpt}")
     model.eval()
 
     # prepare datset
     args.use_mp4 = True if args.video.endswith(".mp4") else False
-    print(
-        f"Loading videos and masks from: {args.video} | INPUT MP4 format: {args.use_mp4}"
-    )
     frames = read_frame_from_videos(args)
     frames, size = resize_frames(frames, size)
     h, w = size[1], size[0]
@@ -146,7 +142,6 @@ def main_worker(
     comp_frames = [None] * video_length
 
     # completing holes by e2fgvi
-    print(f"Start test...")
     for f in tqdm(range(0, video_length, neighbor_stride)):
         neighbor_ids = [
             i
@@ -173,6 +168,7 @@ def main_worker(
             pred_imgs = pred_imgs[:, :, :h, :w]
             pred_imgs = (pred_imgs + 1) / 2
             pred_imgs = pred_imgs.cpu().permute(0, 2, 3, 1).numpy() * 255
+            torch.cuda.empty_cache()
             for i in range(len(neighbor_ids)):
                 idx = neighbor_ids[i]
                 img = np.array(pred_imgs[i]).astype(np.uint8) * binary_masks[
