@@ -9,6 +9,7 @@ from tqdm import tqdm
 import matplotlib.pyplot as plt
 from matplotlib import animation
 import torch
+from itertools import islice
 
 from core.utils import to_tensors
 
@@ -23,7 +24,7 @@ def get_ref_index(f, neighbor_ids, length, ref_length, num_ref):
     else:
         start_idx = max(0, f - ref_length * (num_ref // 2))
         end_idx = min(length, f + ref_length * (num_ref // 2))
-        for i in range(start_idx, end_idx + 1, ref_length):
+        for i in range(start_idx, end_idx, ref_length):
             if i not in neighbor_ids:
                 if len(ref_index) > num_ref:
                     break
@@ -81,12 +82,25 @@ def resize_frames(frames, size=None):
     return frames, size
 
 
+def setup_inpainter_model(model_name, ckpt):
+    # set up models
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    net = importlib.import_module("model." + model_name)
+    model = net.InpaintGenerator().to(device)
+    data = torch.load(ckpt, map_location=device)
+    model.load_state_dict(data)
+    model.eval()
+
+    return model, device
+
+
 def main_worker(
     video,
     ckpt,
     mask,
     out_file,
-    model,
+    model_name,
     step=10,
     num_ref=-1,
     neighbor_stride=5,
@@ -94,13 +108,15 @@ def main_worker(
     set_size=False,
     width=None,
     height=None,
+    model=None,
+    device=None,
 ):
     args = argparse.Namespace()
     args.video = video
     args.ckpt = ckpt
     args.mask = mask
     args.out_file = out_file
-    args.model = model
+    args.model = model_name
     args.step = step
     args.num_ref = num_ref
     args.neighbor_stride = neighbor_stride
@@ -108,8 +124,9 @@ def main_worker(
     args.set_size = set_size
     args.width = width
     args.height = height
-    # set up models
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    if model is None:
+        model, device = setup_inpainter_model(args)
 
     if args.model == "e2fgvi":
         size = (432, 240)
@@ -117,12 +134,6 @@ def main_worker(
         size = (args.width, args.height)
     else:
         size = None
-
-    net = importlib.import_module("model." + args.model)
-    model = net.InpaintGenerator().to(device)
-    data = torch.load(args.ckpt, map_location=device)
-    model.load_state_dict(data)
-    model.eval()
 
     # prepare datset
     args.use_mp4 = True if args.video.endswith(".mp4") else False
